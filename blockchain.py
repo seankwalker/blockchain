@@ -3,28 +3,14 @@ import secrets
 import hashlib
 import time
 from itertools import takewhile
-
-
-"""
-Network
-
-Constructor
-"""
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class Network():
-
-    """
-    ___init___
-
-    initialize the blockchain network
-
-    - { int } difficulty - the proof of work difficulty in the network
-
-    returns None (implicit object return)
-    """
-
     def __init__(self, difficulty):
+        """
+        initialize the blockchain network requiring `difficulty` leading 0s
+        """
         self.chain = []
         self.difficulty = difficulty
 
@@ -33,17 +19,10 @@ class Network():
             {"ip": None, "port": None}
         ]
 
-    """
-    add_block
-
-    add a block to the chain
-
-    - { Block } block - block to add
-
-    returns Bool
-    """
-
     def add_block(self, block):
+        """
+        add `block` to the chain
+        """
         # if genesis block, just add directly
         if len(self.chain) == 0 and block.index == 0:
             self.chain.append(block)
@@ -58,18 +37,10 @@ class Network():
 
         return False
 
-    """
-    validate
-
-    validate the correctness of a block
-
-    - { Block } block  - block to be checked
-    - { Block } parent - parent block to be checked against
-
-    returns Bool
-    """
-
     def validate(self, block, parent):
+        """
+        validate the correctness of `block` against `parent`
+        """
         # TODO: Validate whether a received block is legitimate. You"ll need five different checks here.
         #   1. Has something to do with the timestamp.
         #   2. Has something to do with the hash.
@@ -79,19 +50,16 @@ class Network():
 
         if parent is None:
             # genesis block
+            pass
         else:
+            pass
 
         return  # a boolean denoting whether the block is valid
 
-    """
-    validate_chain
-
-    validate the correctness of the full chain
-
-    returns Bool
-    """
-
     def validate_chain(self):
+        """
+        validate the correctness of the full chain
+        """
         # TODO: Validate whether the the full chain is legitimate (whether each block is individually legitimate).
         if not self.validate(self.chain[0], None):
             return False
@@ -101,54 +69,34 @@ class Network():
 
         return True
 
-    """
-    add_node
-
-    add a new node to the directory
-
-    returns None
-    """
-
     def add_node(self, ip, port):
+        """
+        add a new node to the directory
+        """
         self.directory.append({"ip": ip, "port": port})
 
         return None
 
-    """
-    serialize
-
-    serialize the chain into a format for sharing over the wire
-
-    returns String or Bytes
-    """
-
     def serialize(self):
+        """
+        serialize the chain into a format for sharing over the wire
+        """
         # TODO: Come up with a way to encode the full chain for sharing with new nodes who join the network. JSON may be useful here.
-
+        o = json.JSONEncoder().encode(self.chain)
+        print(o)
         return  # a string or bytestring
 
-    """
-    deserialize
-
-    deserialize the chain from the wire and store
-
-    returns None
-    """
-
     def deserialize(self, chain_repr):
+        """
+        deserialize the chain from the wire and store
+        """
         # TODO: Reverse the behavior of serialize.
-
-        return None
-
-    """
-    __str__
-
-    string representation of the full chain for printing
-
-    returns String
-    """
+        return json.JSONDecoder().decode(chain_repr)
 
     def __str__(self):
+        """
+        string representation of the full chain for printing
+        """
         sc = "\nNo. of Blocks: {l}\n".format(l=len(self.chain))
 
         offset = len(str(len(self.chain)))
@@ -161,28 +109,12 @@ class Network():
         return sc
 
 
-"""
-Block
-
-Constructor
-"""
-
-
 class Block():
-
-    """
-    ___init___
-
-    initialize a block
-
-    - { int } index  - the block index in the chain
-    - { str } parent - the hash of the parent block
-    - { str } data   - the data to be inserted into the block
-
-    returns None (implicit object return)
-    """
-
     def __init__(self, index, parent, data):
+        """
+        initialize a block containing `data` at `index` in the chain with
+        `parent` as its parent block
+        """
         self.index = index
         self.parent_hash = parent
         # NB: You"re welcome to put anything or nothing into the chain.
@@ -190,17 +122,10 @@ class Block():
 
         self.hashed = False
 
-    """
-    hash
-
-    mine a (valid) hash for the block
-
-    - { int } difficulty - the difficulty to be met, from the network
-
-    returns String
-    """
-
     def hash(self, difficulty):
+        """
+        mine a (valid) hash for the block with more than `difficulty` leading 0s
+        """
         # TODO: Implement hashing of block until difficulty is exceeded.
         #       Use the SHA256 hash function (from hashlib library).
         #       The hash should be over the index, hash of parent, a unix epoch timestamp in elapsed seconds (time.time()), a random nonce (from secrets library) and the data.
@@ -240,106 +165,69 @@ class Block():
 
         return self.hash
 
-    """
-    __str__
-
-    string representation of the block for printing
-
-    returns String
-    """
-
     def __str__(self):
+        """
+        string representation of the block for printing
+        """
         return self.hash
 
 
-"""
-generate
+class Node(BaseHTTPRequestHandler):
+    def generate():
+        """
+        generate (mine) a new block
+        TODO: Determine input(s) and output(s).
+        """
+        pass
 
-generate (mine) a new block
+    def genesis():
+        """
+        generate (mine) the genesis block
+        """
+        genesis = Block(0, "0", "Genesis Block")
+        genesis.hash(network.difficulty)
 
-TODO: Determine input(s) and output(s).
-"""
+        network.add_block(genesis)
 
+        return None
 
-def generate():
-    # TODO: Create new block.
-    pass
+    def broadcast():
+        """
+        broadcast mined block to network
+        """
+        # TODO: Broadcast newly generated block to all other nodes in the directory.
+        pass
 
+    def query_chain():
+        """
+        query the current status of the chain
+        """
+        # TODO: Request content of chain from all other nodes (using deserialize class method). Keep the majority/plurality (valid) chain.
+        pass
 
-"""
-genesis
+    def listen_broadcast():
+        """
+        listen for broadcasts of new blocks
+        """
+        # TODO: Handle newly broadcast prospective block (i.e. add to chain if valid).
+        #       If using HTTP, this should be a route handler.
+        pass
 
-generate (mine) the genesis block
+    def listen_query(self):
+        """
+        list for requests for current chain status
+        """
+        # TODO: Respond to query for contents of full chain (using serialize class method).
+        #       If using HTTP, this should be a route handler.
+        pass
 
-returns None
-"""
+    def do_GET(self):
+        if self.path == "/query":
+            listen_query(self)
+        elif self.path == "/broadcast":
 
-
-def genesis():
-    genesis = Block(0, "0", "Genesis Block")
-    genesis.hash(network.difficulty)
-
-    network.add_block(genesis)
-
-    return None
-
-
-"""
-broadcast
-
-broadcast mined block to network
-
-TODO: Determine input(s) and output(s).
-"""
-
-
-def broadcast():
-    # TODO: Broadcast newly generated block to all other nodes in the directory.
-    pass
-
-
-"""
-query_chain
-
-query the current status of the chain
-
-TODO: Determine input(s) and output(s).
-"""
-
-
-def query_chain():
-    # TODO: Request content of chain from all other nodes (using deserialize class method). Keep the majority/plurality (valid) chain.
-    pass
-
-
-"""
-listen_broadcast
-
-listen for broadcasts of new blocks
-
-TODO: Determine input(s) and output(s).
-"""
-
-
-def listen_broadcast():
-    # TODO: Handle newly broadcast prospective block (i.e. add to chain if valid).
-    #       If using HTTP, this should be a route handler.
-    pass
-
-
-"""
-listen_query
-
-list for requests for current chain status
-
-TODO: Determine input(s) and output(s).
-"""
-
-
-def listen_query():
-    # TODO: Respond to query for contents of full chain (using serialize class method).
-    #       If using HTTP, this should be a route handler.
-    pass
+        else:
+            self.send_error(400, "invalid endpoint")
 
 
 if __name__ == "__main__":
