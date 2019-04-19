@@ -4,9 +4,10 @@ import hashlib
 import time
 from itertools import takewhile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import requests
 
 
-class Network():
+class Network:
     def __init__(self, difficulty):
         """
         initialize the blockchain network requiring `difficulty` leading 0s
@@ -41,8 +42,9 @@ class Network():
         """
         validate the correctness of `block` against `parent`
         """
-        # TODO: Validate whether a received block is legitimate. You"ll need five different checks here.
-        #   1. Has something to do with the timestamp.
+        # TODO: Validate whether a received block is legitimate.
+        # You'll need five different checks here.
+        #   1. Has something to do with the timestamp. <- later than the parent)
         #   2. Has something to do with the hash.
         #   3. Has something else to do with the hash.
         #   4. Has something to do with the parent.
@@ -84,7 +86,7 @@ class Network():
         # TODO: Come up with a way to encode the full chain for sharing with new nodes who join the network. JSON may be useful here.
         o = json.JSONEncoder().encode(self.chain)
         print(o)
-        return  # a string or bytestring
+        return o.encode()
 
     def deserialize(self, chain_repr):
         """
@@ -109,7 +111,7 @@ class Network():
         return sc
 
 
-class Block():
+class Block:
     def __init__(self, index, parent, data):
         """
         initialize a block containing `data` at `index` in the chain with
@@ -117,7 +119,6 @@ class Block():
         """
         self.index = index
         self.parent_hash = parent
-        # NB: You"re welcome to put anything or nothing into the chain.
         self.data = data
 
         self.hashed = False
@@ -173,12 +174,30 @@ class Block():
 
 
 class Node(BaseHTTPRequestHandler):
+    def __init__(self, ip, port, *args):
+        self.chain = None
+        self.ip = ip
+        self.port = port
+        network.add_node(ip, port)
+        BaseHTTPRequestHandler.__init__(self, *args)
+
+    def do_GET(self):
+        print(f"received GET request: {self.request}")
+        if self.path == "/broadcast":
+            # broadcast request
+            return self.listen_broadcast()
+        elif self.path == "/query":
+            # query request
+            return self.listen_query()
+
     def generate():
         """
         generate (mine) a new block
         TODO: Determine input(s) and output(s).
         """
-        pass
+        block = Block(self.chain[-1].index, self.chain[-1].hash, None)
+        block.hash(network.difficulty)
+        self.broadcast(block)
 
     def genesis():
         """
@@ -191,27 +210,41 @@ class Node(BaseHTTPRequestHandler):
 
         return None
 
-    def broadcast():
+    def broadcast(self, block):
         """
         broadcast mined block to network
         """
-        # TODO: Broadcast newly generated block to all other nodes in the directory.
-        pass
+        for node in network.directory:
+            r = requests.get(node.ip + ":" + str(node.port) + "/broadcast",
+                             params={"index": block.index,
+                                     "parent_hash": block.parent_hash,
+                                     "data": block.data
+                                     })
+            print(
+                f"broadcasted block to {node.ip}: {node.port} | result: {r.status_code}")
 
-    def query_chain():
+    def query_chain(self):
         """
         query the current status of the chain
         """
-        # TODO: Request content of chain from all other nodes (using deserialize class method). Keep the majority/plurality (valid) chain.
+        # TODO: Request content of chain from all other nodes (using deserialize
+        # class method). Keep the majority/plurality (valid) chain.
+        longest_chain = self.chain
+        for node in network.directory:
+            r = requests.get(node.ip + ":" + str(node.port) + "/query")
+            pass
         pass
 
-    def listen_broadcast():
+    def listen_broadcast(self):
         """
         listen for broadcasts of new blocks
         """
         # TODO: Handle newly broadcast prospective block (i.e. add to chain if valid).
         #       If using HTTP, this should be a route handler.
-        pass
+        print(f"`listen_broadcast`: received request {self.request}")
+        block = Block(self.request.params.index,
+                      self.request.params.parent, self.request.params.data)
+        # network.validate(block, )
 
     def listen_query(self):
         """
@@ -219,15 +252,20 @@ class Node(BaseHTTPRequestHandler):
         """
         # TODO: Respond to query for contents of full chain (using serialize class method).
         #       If using HTTP, this should be a route handler.
-        pass
+        print(f"`listen_query`: received request {self.request}")
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(network.serialize())
 
-    def do_GET(self):
-        if self.path == "/query":
-            listen_query(self)
-        elif self.path == "/broadcast":
 
-        else:
-            self.send_error(400, "invalid endpoint")
+class NodeServer:
+    def __init__(self, ip, port):
+        def handler(*args):
+            Node(ip, port, *args)
+
+        node_server = HTTPServer((ip, port), handler)
+        node_server.serve_forever()
 
 
 if __name__ == "__main__":
@@ -235,3 +273,5 @@ if __name__ == "__main__":
     # makes it easier to use with both tcp/http
     global network
     network = Network(4)
+
+    node_a = NodeServer("0.0.0.0", 8888)
