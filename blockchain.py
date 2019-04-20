@@ -5,6 +5,13 @@ import time
 from itertools import takewhile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
+import threading
+from urllib.parse import parse_qs, urlparse
+
+
+class ChainEncoder(json.JSONEncoder):
+    def default(self, o):
+        return o.__dict__
 
 
 class Network:
@@ -27,13 +34,11 @@ class Network:
         # if genesis block, just add directly
         if len(self.chain) == 0 and block.index == 0:
             self.chain.append(block)
-
             return True
 
         # check that new block is valid and child of current head of the chain
         if self.validate(block, self.chain[-1]):
             self.chain.append(block)
-
             return True
 
         return False
@@ -44,28 +49,60 @@ class Network:
         """
         # TODO: Validate whether a received block is legitimate.
         # You'll need five different checks here.
-        #   1. Has something to do with the timestamp. <- later than the parent)
+        #   1. Has something to do with the timestamp. <- later than the parent
         #   2. Has something to do with the hash.
         #   3. Has something else to do with the hash.
         #   4. Has something to do with the parent.
         #   5. Has something else to do with the parent.
 
-        if parent is None:
-            # genesis block
-            pass
-        else:
-            pass
+        # checks on block
+        if not block.hash(self.difficulty) == block.hash_val:
+            # block's stored hash matches
+            return False
 
-        return  # a boolean denoting whether the block is valid
+        if (block.hash_val[self.difficulty:] !=
+                [0 for _ in range(self.difficulty)]):
+            # block's hash has the required number of zerores
+            return False
+
+        if parent is not None:
+            # checks for non-genesis blocks (parent required)
+            if block.timestamp < parent.timestamp:
+                # block must have been created after its parent
+                return False
+
+            if not block.hash(self.difficulty) == block.hash_val:
+                # block's stored hash matches
+                return False
+
+            if (block.hash_val[self.difficulty:] !=
+                    [0 for _ in range(self.difficulty)]):
+                # block's hash has the required number of zerores
+                return False
+
+            if parent.hash_val != block.parent_hash:
+                # block's stored hash of its parent should match the parent
+                # block's hash
+                # n.b. the parent's hash is verified to be valid of its stored
+                # hash since it is part of the chain, thus `validate` approved
+                # it before
+                return False
+
+            if block.index != parent.index+1:
+                # block should immediately follow its parent in the chain
+                return False
+
+        return True
 
     def validate_chain(self):
         """
         validate the correctness of the full chain
         """
-        # TODO: Validate whether the the full chain is legitimate (whether each block is individually legitimate).
         if not self.validate(self.chain[0], None):
+            # genesis block
             return False
         for block_num, block in enumerate(self.chain[1:]):
+            # remainder of chain
             if not self.validate(block, self.chain[block_num-1]):
                 return False
 
@@ -77,22 +114,16 @@ class Network:
         """
         self.directory.append({"ip": ip, "port": port})
 
-        return None
-
     def serialize(self):
         """
         serialize the chain into a format for sharing over the wire
         """
-        # TODO: Come up with a way to encode the full chain for sharing with new nodes who join the network. JSON may be useful here.
-        o = json.JSONEncoder().encode(self.chain)
-        print(o)
-        return o.encode()
+        return bytes(ChainEncoder().encode(self.chain), "utf-8")
 
     def deserialize(self, chain_repr):
         """
         deserialize the chain from the wire and store
         """
-        # TODO: Reverse the behavior of serialize.
         return json.JSONDecoder().decode(chain_repr)
 
     def __str__(self):
@@ -121,34 +152,19 @@ class Block:
         self.parent_hash = parent
         self.data = data
 
-        self.hashed = False
-
     def hash(self, difficulty):
         """
         mine a (valid) hash for the block with more than `difficulty` leading 0s
         """
-        # TODO: Implement hashing of block until difficulty is exceeded.
-        #       Use the SHA256 hash function (from hashlib library).
-        #       The hash should be over the index, hash of parent, a unix epoch timestamp in elapsed seconds (time.time()), a random nonce (from secrets library) and the data.
-        #       We will refer to all of these contents except the data as a "header".
-        #       It is recommended that you store and use the hex representation of the hash, from hash.hexdigest().
-        #
-        # HINTS
-        #
-        #       "[U]ntil difficulty is exceeded" means at least the specified number of leading zeros are present in the
-        #       hash as the "proof of work." You"ll have to keep hashing with different nonces till you get one that works.
-        #
-        #       You may query the random nonce once and increment it each try.
-
         self.timestamp = time.time()
-        self.nonce = secrets.token_byes()
+        self.nonce = secrets.randbits(30)
 
         iterations = 0
         while True:
             # keep working on a nonce until we get one exceeding the difficulty
             header = str(self.index).encode("utf-8") + b" " + str(self.parent_hash).encode("utf-8") + \
                 b" " + str(self.timestamp).encode("utf-8") + \
-                b" " + str(self.nonce + iterations).encode("utf-8")
+                b" " + str(int(self.nonce) + iterations).encode("utf-8")
 
             hash_attempt = hashlib.sha256(
                 header+b" "+str(self.data).encode("utf-8")).hexdigest()
@@ -157,71 +173,83 @@ class Block:
                 1 for _ in takewhile("0".__eq__, str(hash_attempt)))
 
             if num_leading_zeroes > difficulty:
-                print(f"difficult-enough nonce found! {nonce}")
+                print(f"difficult-enough nonce found! {self.nonce}")
                 break
             iterations += 1
 
-        self.hash = hash_attempt
-        self.hashed = True
-
-        return self.hash
+        self.hash_val = hash_attempt
+        return self.hash_val
 
     def __str__(self):
         """
         string representation of the block for printing
         """
-        return self.hash
+        return self.hash_val
 
 
 class Node(BaseHTTPRequestHandler):
-    def __init__(self, ip, port, *args):
-        self.chain = None
-        self.ip = ip
-        self.port = port
-        network.add_node(ip, port)
+    def __init__(self, network, *args):
+        print(f"__init__ called on {self}")
+        self.network = network
+        self.server_version = "JoanCoin"
+        self.sys_version = "0.1.0"
         BaseHTTPRequestHandler.__init__(self, *args)
 
     def do_GET(self):
         print(f"received GET request: {self.request}")
-        if self.path == "/broadcast":
+        endpoint = urlparse(self.path).path
+        if endpoint == "/broadcast":
             # broadcast request
-            return self.listen_broadcast()
-        elif self.path == "/query":
+            self.listen_broadcast()
+        elif endpoint == "/genesis":
+            # mine genesis block
+            self.genesis()
+        elif endpoint == "/query":
             # query request
-            return self.listen_query()
+            self.listen_query()
+        else:
+            self.send_response(404, "no such endpoint")
+            self.end_headers()
 
-    def generate():
+    def generate(self):
         """
         generate (mine) a new block
+        add mined block to this Node's chain
+        broadcast mine block to Node's Network
         TODO: Determine input(s) and output(s).
         """
         block = Block(self.chain[-1].index, self.chain[-1].hash, None)
-        block.hash(network.difficulty)
+
+        # mine block
+        block.hash(self.network.difficulty)
+
+        # add block to this Node's chain and send it to all other Nodes in
+        # network
+        self.network.add_block(block)
         self.broadcast(block)
 
-    def genesis():
+    def genesis(self):
         """
         generate (mine) the genesis block
         """
         genesis = Block(0, "0", "Genesis Block")
-        genesis.hash(network.difficulty)
 
-        network.add_block(genesis)
-
-        return None
+        # mine genesis block
+        genesis.hash(self.network.difficulty)
+        self.network.add_block(genesis)
 
     def broadcast(self, block):
         """
         broadcast mined block to network
         """
-        for node in network.directory:
+        for node in self.network.directory:
             r = requests.get(node.ip + ":" + str(node.port) + "/broadcast",
                              params={"index": block.index,
                                      "parent_hash": block.parent_hash,
                                      "data": block.data
                                      })
             print(
-                f"broadcasted block to {node.ip}: {node.port} | result: {r.status_code}")
+                f"broadcasted block to {node.ip}: {node.port} | result: {r}")
 
     def query_chain(self):
         """
@@ -229,11 +257,10 @@ class Node(BaseHTTPRequestHandler):
         """
         # TODO: Request content of chain from all other nodes (using deserialize
         # class method). Keep the majority/plurality (valid) chain.
-        longest_chain = self.chain
-        for node in network.directory:
+        chains = []
+        for node in self.network.directory:
             r = requests.get(node.ip + ":" + str(node.port) + "/query")
-            pass
-        pass
+            print(f"{r}")
 
     def listen_broadcast(self):
         """
@@ -241,10 +268,36 @@ class Node(BaseHTTPRequestHandler):
         """
         # TODO: Handle newly broadcast prospective block (i.e. add to chain if valid).
         #       If using HTTP, this should be a route handler.
-        print(f"`listen_broadcast`: received request {self.request}")
-        block = Block(self.request.params.index,
-                      self.request.params.parent, self.request.params.data)
-        # network.validate(block, )
+        print(f"`listen_broadcast`: received request")
+
+        if "?" not in self.path:
+            # invalid request
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        query_string = self.path.split("?")[-1]
+        try:
+            params = parse_qs(query_string, max_num_fields=3)
+        except ValueError:
+            # invalid request (too many parameters)
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        # params is a dictionary of query parameter to list (of length 1)
+        # of the associated value
+
+        block = Block(params["index"][0], params["parent"]
+                      [0], params["data"][0])
+        if self.chain:
+            parent = self.chain[-1]
+        else:
+            parent = None
+        block_is_valid = network.validate(block, parent)
+
+        if block_is_valid:
+            self.chain.append(block)
 
     def listen_query(self):
         """
@@ -256,22 +309,35 @@ class Node(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.end_headers()
-        self.wfile.write(network.serialize())
+        self.wfile.write(self.network.serialize())
 
 
 class NodeServer:
     def __init__(self, ip, port):
-        def handler(*args):
-            Node(ip, port, *args)
+        self.network = Network(4)
+        self.network.add_node(ip, port)
 
-        node_server = HTTPServer((ip, port), handler)
-        node_server.serve_forever()
+        def handler(*args):
+            Node(self.network, *args)
+
+        self.node_server = HTTPServer((ip, port), handler)
+
+    def start(self):
+        self.node_server.serve_forever()
 
 
 if __name__ == "__main__":
-    # hoist the network up to the global context
-    # makes it easier to use with both tcp/http
-    global network
-    network = Network(4)
-
+    # start a new thread for each node
     node_a = NodeServer("0.0.0.0", 8888)
+    # node_b = NodeServer("0.0.0.0", 9999)
+
+    node_a.start()
+
+    # thread_a = threading.Thread(target=node_a.start)
+    # thread_b = threading.Thread(target=node_b.start)
+
+    # thread_a.start()
+    # thread_b.start()
+
+    # thread_a.join()
+    # thread_b.join()
