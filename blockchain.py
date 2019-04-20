@@ -59,6 +59,7 @@ class Network:
             print("appended non-genesis block!")
             return True
 
+        print("rejected block")
         return False
 
     def check_hash(self, block):
@@ -69,7 +70,8 @@ class Network:
         iterations = 0
         while True:
             # keep working on a nonce until we get one exceeding the difficulty
-            header = str(block.index).encode("utf-8") + b" " + str(block.parent_hash).encode("utf-8") + \
+            header = str(block.index).encode("utf-8") + b" " + \
+                str(block.parent_hash).encode("utf-8") + \
                 b" " + str(block.timestamp).encode("utf-8") + \
                 b" " + str(int(block.nonce) + iterations).encode("utf-8")
 
@@ -91,22 +93,17 @@ class Network:
         """
         if not self.check_hash(block) == block.hash_val:
             # block's stored hash matches
-            print("1")
             return False
 
         if (block.hash_val[:self.difficulty] !=
                 "".join(["0" for _ in range(self.difficulty)])):
             # block's hash has the required number of zerores
-            print("2")
             return False
 
         if parent is not None:
             # checks for non-genesis blocks (parent required)
-            print(
-                f"block timestamp: {block.timestamp} parent timestamp: {parent.timestamp}")
             if block.timestamp < parent.timestamp:
                 # block must have been created after its parent
-                print("3")
                 return False
 
             if parent.hash_val != block.parent_hash:
@@ -115,12 +112,10 @@ class Network:
                 # n.b. the parent's hash is verified to be valid of its stored
                 # hash since it is part of the chain, thus `validate` approved
                 # it before
-                print("4")
                 return False
 
             if block.index != parent.index+1:
                 # block should immediately follow its parent in the chain
-                print("5")
                 return False
 
         return True
@@ -213,7 +208,8 @@ class Block:
         iterations = 0
         while True:
             # keep working on a nonce until we get one exceeding the difficulty
-            header = str(self.index).encode("utf-8") + b" " + str(self.parent_hash).encode("utf-8") + \
+            header = str(self.index).encode("utf-8") + b" " + \
+                str(self.parent_hash).encode("utf-8") + \
                 b" " + str(self.timestamp).encode("utf-8") + \
                 b" " + str(int(self.nonce) + iterations).encode("utf-8")
 
@@ -292,7 +288,6 @@ class Node(BaseHTTPRequestHandler):
             self.genesis()
             return
 
-        print("generating new block...")
         block = Block(self.network.chain[-1].index+1,
                       self.network.chain[-1].hash_val,
                       random.choice(DATA_MESSAGES))
@@ -338,22 +333,16 @@ class Node(BaseHTTPRequestHandler):
         """
         chain_counter = Counter()
         for node in self.network.directory:
-            print(f"requesting chain from {node['ip']}:{node['port']}")
             r = requests.get("http://" + node["ip"] + ":" +
                              str(node["port"]) + "/query")
 
             deserialized_chain = self.network.deserialize(r.content)
-            print("deserialized chain:", deserialized_chain)
             if deserialized_chain:
                 self.network.chain = deserialized_chain
                 if (self.network.validate_chain()):
-                    print("chain valid!")
                     chain_counter[tuple(self.network.chain)] += 1
-                else:
-                    print("chain invalid")
 
         self.network.chain = chain_counter.most_common(1)[0][0]
-        print("new chain after query: ", self.network.chain)
 
     def listen_broadcast(self):
         """
@@ -377,14 +366,12 @@ class Node(BaseHTTPRequestHandler):
 
         rec_block = Block(from_dict=block_params)
         print(f"received block on {self.ip}:{self.port}: {rec_block}")
-
         self.network.add_block(rec_block)
 
     def listen_query(self):
         """
         list for requests for current chain status
         """
-        print(f"`listen_query`: received request {self.request}")
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.end_headers()
