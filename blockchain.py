@@ -1,3 +1,15 @@
+"""
+    blockchain.py
+
+    Name:  Sean Walker
+    NetID: skw34
+
+    CPSC 310, Spring 2019
+    Homework 4
+
+    Implements logic for an HTTP blockchain.
+"""
+
 import json
 import secrets
 import hashlib
@@ -8,6 +20,13 @@ import requests
 import threading
 import urllib.parse as urlparse
 import copy
+import random
+from collections import Counter
+
+
+# data in the blockchain, just for fun
+DATA_MESSAGES = ["hello, world", "yolo",
+                 "cpsc 310 for life", "https://youtu.be/dQw4w9WgXcQ"]
 
 
 class BlockchainEncoder(json.JSONEncoder):
@@ -72,17 +91,22 @@ class Network:
         """
         if not self.check_hash(block) == block.hash_val:
             # block's stored hash matches
+            print("1")
             return False
 
         if (block.hash_val[:self.difficulty] !=
                 "".join(["0" for _ in range(self.difficulty)])):
             # block's hash has the required number of zerores
+            print("2")
             return False
 
         if parent is not None:
             # checks for non-genesis blocks (parent required)
+            print(
+                f"block timestamp: {block.timestamp} parent timestamp: {parent.timestamp}")
             if block.timestamp < parent.timestamp:
                 # block must have been created after its parent
+                print("3")
                 return False
 
             if parent.hash_val != block.parent_hash:
@@ -91,10 +115,12 @@ class Network:
                 # n.b. the parent's hash is verified to be valid of its stored
                 # hash since it is part of the chain, thus `validate` approved
                 # it before
+                print("4")
                 return False
 
             if block.index != parent.index+1:
                 # block should immediately follow its parent in the chain
+                print("5")
                 return False
 
         return True
@@ -106,9 +132,9 @@ class Network:
         if not self.validate(self.chain[0], None):
             # genesis block
             return False
-        for block_num, block in enumerate(self.chain[1:]):
+        for parent_idx, block in enumerate(self.chain[1:]):
             # remainder of chain
-            if not self.validate(block, self.chain[block_num-1]):
+            if not self.validate(block, self.chain[parent_idx]):
                 return False
 
         return True
@@ -129,7 +155,19 @@ class Network:
         """
         deserialize the chain from the wire and store
         """
-        return json.JSONDecoder().decode(chain_repr)
+        list_of_param_dicts = json.JSONDecoder().decode(str(chain_repr,
+                                                            "utf-8"))
+        chain = []
+        for params in list_of_param_dicts:
+            block_params = {"index": int(params["index"]),
+                            "data": params["data"],
+                            "parent_hash": params["parent_hash"],
+                            "hash_val": params["hash_val"],
+                            "nonce": int(params["nonce"]),
+                            "timestamp": float(params["timestamp"])}
+            chain.append(Block(from_dict=block_params))
+
+        return chain
 
     def __str__(self):
         """
@@ -148,14 +186,22 @@ class Network:
 
 
 class Block:
-    def __init__(self, index, parent_hash, data):
+    def __init__(self, index=None, parent_hash=None, data=None, from_dict=None):
         """
         initialize a block containing `data` at `index` in the chain with
         `parent` as its parent block
         """
-        self.index = index
-        self.parent_hash = parent_hash
-        self.data = data
+        if from_dict is not None:
+            self.index = from_dict["index"]
+            self.parent_hash = from_dict["parent_hash"]
+            self.data = from_dict["data"]
+            self.hash_val = from_dict["hash_val"]
+            self.nonce = from_dict["nonce"]
+            self.timestamp = from_dict["timestamp"]
+        else:
+            self.index = index
+            self.parent_hash = parent_hash
+            self.data = data
 
     def hash(self, difficulty):
         """
@@ -193,8 +239,8 @@ class Block:
 
 
 class Node(BaseHTTPRequestHandler):
-    def __init__(self, network, ip, port, *args):
-        print(f"__init__ called on {self}")
+    def __init__(self, network, ip, port, dishonest, *args):
+        self.dishonest = dishonest
         self.ip = ip
         self.network = network
         self.port = port
@@ -202,18 +248,33 @@ class Node(BaseHTTPRequestHandler):
         self.sys_version = "0.1.0"
         BaseHTTPRequestHandler.__init__(self, *args)
 
+    def do_GET(self):
+        self.log_request()
+        self.log_message(f"port: {self.port}")
+        endpoint = urlparse.urlparse(self.path).path
+        if endpoint == "/query":
+            # query request
+            self.listen_query()
+        else:
+            self.send_response(404, "no such endpoint")
+            self.end_headers()
+
     def do_HEAD(self):
         self.log_request()
+        self.log_message(f"port: {self.port}")
         endpoint = urlparse.urlparse(self.path).path
         if endpoint == "/broadcast":
             # broadcast request
             self.listen_broadcast()
+        elif endpoint == "/generate":
+            # mine a block
+            self.generate()
         elif endpoint == "/genesis":
             # mine genesis block
             self.genesis()
-        elif endpoint == "/query":
-            # query request
-            self.listen_query()
+        elif endpoint == "/pull":
+            # get valid chain from neighbors
+            self.query_chain()
         else:
             self.send_response(404, "no such endpoint")
             self.end_headers()
@@ -224,7 +285,17 @@ class Node(BaseHTTPRequestHandler):
         add mined block to this Node's chain
         broadcast mine block to Node's Network
         """
-        block = Block(self.chain[-1].index, self.chain[-1].hash, None)
+        if len(self.network.chain) == 0:
+            print(
+                "`generate` called, but chain is nonexistant;",
+                "delegating to `genesis`...")
+            self.genesis()
+            return
+
+        print("generating new block...")
+        block = Block(self.network.chain[-1].index+1,
+                      self.network.chain[-1].hash_val,
+                      random.choice(DATA_MESSAGES))
 
         # mine block
         block.hash(self.network.difficulty)
@@ -250,9 +321,6 @@ class Node(BaseHTTPRequestHandler):
         broadcast mined block to network
         """
         for node in self.network.directory:
-            if node["ip"] == self.ip and node["port"] == self.port:
-                continue
-
             print(f"broadcasted block to {node['ip']}:{node['port']}")
             r = requests.head(("http://" + node["ip"] + ":" + str(node["port"])
                                + "/broadcast"),
@@ -265,14 +333,27 @@ class Node(BaseHTTPRequestHandler):
 
     def query_chain(self):
         """
-        query the current status of the chain
+        query the current status of the chain from neighbors and update this
+        node's chain to be the longest of all neighbors' valid chains
         """
-        chains = []
+        chain_counter = Counter()
         for node in self.network.directory:
-            r = requests.head("http://" + node.ip + ":" +
-                              str(node.port) + "/query")
-            chain = self.network.deserialize(r.json())
-            print(f"{chain}")
+            print(f"requesting chain from {node['ip']}:{node['port']}")
+            r = requests.get("http://" + node["ip"] + ":" +
+                             str(node["port"]) + "/query")
+
+            deserialized_chain = self.network.deserialize(r.content)
+            print("deserialized chain:", deserialized_chain)
+            if deserialized_chain:
+                self.network.chain = deserialized_chain
+                if (self.network.validate_chain()):
+                    print("chain valid!")
+                    chain_counter[tuple(self.network.chain)] += 1
+                else:
+                    print("chain invalid")
+
+        self.network.chain = chain_counter.most_common(1)[0][0]
+        print("new chain after query: ", self.network.chain)
 
     def listen_broadcast(self):
         """
@@ -282,12 +363,19 @@ class Node(BaseHTTPRequestHandler):
         self.end_headers()
 
         rec_params = urlparse.parse_qs(urlparse.urlparse(self.path).query)
-        rec_block = Block(
-            int(rec_params["index"][0]), rec_params["parent_hash"][0], rec_params["data"][0])
-        rec_block.hash_val = rec_params["hash_val"][0]
-        rec_block.nonce = int(rec_params["nonce"][0])
-        rec_block.timestamp = float(rec_params["timestamp"][0])
+        block_params = {"index": int(rec_params["index"][0]),
+                        "data": rec_params["data"][0],
+                        "parent_hash": rec_params["parent_hash"][0],
+                        "hash_val": rec_params["hash_val"][0],
+                        "nonce": int(rec_params["nonce"][0]),
+                        "timestamp": float(rec_params["timestamp"][0])}
 
+        if self.dishonest:
+            # ignore everything besides the genesis block
+            if block_params["index"] != 0:
+                return
+
+        rec_block = Block(from_dict=block_params)
         print(f"received block on {self.ip}:{self.port}: {rec_block}")
 
         self.network.add_block(rec_block)
@@ -304,38 +392,13 @@ class Node(BaseHTTPRequestHandler):
 
 
 class NodeServer:
-    def __init__(self, ip, port, network):
+    def __init__(self, ip, port, network, dishonest=False):
         self.network = network
 
         def handler(*args):
-            Node(self.network, ip, port, *args)
+            Node(self.network, ip, port, dishonest, *args)
 
         self.node_server = HTTPServer((ip, port), handler)
 
     def start(self):
         self.node_server.serve_forever()
-
-
-if __name__ == "__main__":
-    # start a new thread for each node
-
-    network = Network(1)
-    network.add_node("0.0.0.0", 8888)   # node A
-    network.add_node("0.0.0.0", 9999)   # node B
-    network.add_node("0.0.0.0", 7777)   # node C
-
-    node_a = NodeServer("0.0.0.0", 8888, copy.deepcopy(network))
-    node_b = NodeServer("0.0.0.0", 9999, copy.deepcopy(network))
-    node_c = NodeServer("0.0.0.0", 7777, copy.deepcopy(network))
-
-    thread_a = threading.Thread(target=node_a.start)
-    thread_b = threading.Thread(target=node_b.start)
-    thread_c = threading.Thread(target=node_c.start)
-
-    thread_a.start()
-    thread_b.start()
-    thread_c.start()
-
-    thread_a.join()
-    thread_b.join()
-    thread_c.join()
