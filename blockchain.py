@@ -6,10 +6,11 @@ from itertools import takewhile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
 import threading
-from urllib.parse import parse_qs, urlparse
+import urllib.parse as urlparse
+import copy
 
 
-class ChainEncoder(json.JSONEncoder):
+class BlockchainEncoder(json.JSONEncoder):
     def default(self, o):
         return o.__dict__
 
@@ -21,11 +22,7 @@ class Network:
         """
         self.chain = []
         self.difficulty = difficulty
-
-        # TODO: Fill out with address information for other nodes
-        self.directory = [
-            {"ip": None, "port": None}
-        ]
+        self.directory = []
 
     def add_block(self, block):
         """
@@ -34,34 +31,51 @@ class Network:
         # if genesis block, just add directly
         if len(self.chain) == 0 and block.index == 0:
             self.chain.append(block)
+            print("appended genesis block!")
             return True
 
         # check that new block is valid and child of current head of the chain
         if self.validate(block, self.chain[-1]):
             self.chain.append(block)
+            print("appended non-genesis block!")
             return True
 
         return False
+
+    def check_hash(self, block):
+        """
+        returns hash of `block` with difficulty of this network
+        """
+
+        iterations = 0
+        while True:
+            # keep working on a nonce until we get one exceeding the difficulty
+            header = str(block.index).encode("utf-8") + b" " + str(block.parent_hash).encode("utf-8") + \
+                b" " + str(block.timestamp).encode("utf-8") + \
+                b" " + str(int(block.nonce) + iterations).encode("utf-8")
+
+            hash_attempt = hashlib.sha256(
+                header+b" "+str(block.data).encode("utf-8")).hexdigest()
+
+            num_leading_zeroes = sum(
+                1 for _ in takewhile("0".__eq__, str(hash_attempt)))
+
+            if num_leading_zeroes > self.difficulty:
+                break
+            iterations += 1
+
+        return hash_attempt
 
     def validate(self, block, parent):
         """
         validate the correctness of `block` against `parent`
         """
-        # TODO: Validate whether a received block is legitimate.
-        # You'll need five different checks here.
-        #   1. Has something to do with the timestamp. <- later than the parent
-        #   2. Has something to do with the hash.
-        #   3. Has something else to do with the hash.
-        #   4. Has something to do with the parent.
-        #   5. Has something else to do with the parent.
-
-        # checks on block
-        if not block.hash(self.difficulty) == block.hash_val:
+        if not self.check_hash(block) == block.hash_val:
             # block's stored hash matches
             return False
 
-        if (block.hash_val[self.difficulty:] !=
-                [0 for _ in range(self.difficulty)]):
+        if (block.hash_val[:self.difficulty] !=
+                "".join(["0" for _ in range(self.difficulty)])):
             # block's hash has the required number of zerores
             return False
 
@@ -69,15 +83,6 @@ class Network:
             # checks for non-genesis blocks (parent required)
             if block.timestamp < parent.timestamp:
                 # block must have been created after its parent
-                return False
-
-            if not block.hash(self.difficulty) == block.hash_val:
-                # block's stored hash matches
-                return False
-
-            if (block.hash_val[self.difficulty:] !=
-                    [0 for _ in range(self.difficulty)]):
-                # block's hash has the required number of zerores
                 return False
 
             if parent.hash_val != block.parent_hash:
@@ -118,7 +123,7 @@ class Network:
         """
         serialize the chain into a format for sharing over the wire
         """
-        return bytes(ChainEncoder().encode(self.chain), "utf-8")
+        return bytes(BlockchainEncoder().encode(self.chain), "utf-8")
 
     def deserialize(self, chain_repr):
         """
@@ -143,13 +148,13 @@ class Network:
 
 
 class Block:
-    def __init__(self, index, parent, data):
+    def __init__(self, index, parent_hash, data):
         """
         initialize a block containing `data` at `index` in the chain with
         `parent` as its parent block
         """
         self.index = index
-        self.parent_hash = parent
+        self.parent_hash = parent_hash
         self.data = data
 
     def hash(self, difficulty):
@@ -188,16 +193,18 @@ class Block:
 
 
 class Node(BaseHTTPRequestHandler):
-    def __init__(self, network, *args):
+    def __init__(self, network, ip, port, *args):
         print(f"__init__ called on {self}")
+        self.ip = ip
         self.network = network
+        self.port = port
         self.server_version = "JoanCoin"
         self.sys_version = "0.1.0"
         BaseHTTPRequestHandler.__init__(self, *args)
 
-    def do_GET(self):
-        print(f"received GET request: {self.request}")
-        endpoint = urlparse(self.path).path
+    def do_HEAD(self):
+        self.log_request()
+        endpoint = urlparse.urlparse(self.path).path
         if endpoint == "/broadcast":
             # broadcast request
             self.listen_broadcast()
@@ -216,7 +223,6 @@ class Node(BaseHTTPRequestHandler):
         generate (mine) a new block
         add mined block to this Node's chain
         broadcast mine block to Node's Network
-        TODO: Determine input(s) and output(s).
         """
         block = Block(self.chain[-1].index, self.chain[-1].hash, None)
 
@@ -237,74 +243,59 @@ class Node(BaseHTTPRequestHandler):
         # mine genesis block
         genesis.hash(self.network.difficulty)
         self.network.add_block(genesis)
+        self.broadcast(genesis)
 
     def broadcast(self, block):
         """
         broadcast mined block to network
         """
         for node in self.network.directory:
-            r = requests.get(node.ip + ":" + str(node.port) + "/broadcast",
-                             params={"index": block.index,
-                                     "parent_hash": block.parent_hash,
-                                     "data": block.data
-                                     })
-            print(
-                f"broadcasted block to {node.ip}: {node.port} | result: {r}")
+            if node["ip"] == self.ip and node["port"] == self.port:
+                continue
+
+            print(f"broadcasted block to {node['ip']}:{node['port']}")
+            r = requests.head(("http://" + node["ip"] + ":" + str(node["port"])
+                               + "/broadcast"),
+                              params={"data": block.data,
+                                      "hash_val": block.hash_val,
+                                      "index": block.index,
+                                      "nonce": block.nonce,
+                                      "parent_hash": block.parent_hash,
+                                      "timestamp": block.timestamp})
 
     def query_chain(self):
         """
         query the current status of the chain
         """
-        # TODO: Request content of chain from all other nodes (using deserialize
-        # class method). Keep the majority/plurality (valid) chain.
         chains = []
         for node in self.network.directory:
-            r = requests.get(node.ip + ":" + str(node.port) + "/query")
-            print(f"{r}")
+            r = requests.head("http://" + node.ip + ":" +
+                              str(node.port) + "/query")
+            chain = self.network.deserialize(r.json())
+            print(f"{chain}")
 
     def listen_broadcast(self):
         """
         listen for broadcasts of new blocks
         """
-        # TODO: Handle newly broadcast prospective block (i.e. add to chain if valid).
-        #       If using HTTP, this should be a route handler.
-        print(f"`listen_broadcast`: received request")
+        self.send_response(200)
+        self.end_headers()
 
-        if "?" not in self.path:
-            # invalid request
-            self.send_response(400)
-            self.end_headers()
-            return
+        rec_params = urlparse.parse_qs(urlparse.urlparse(self.path).query)
+        rec_block = Block(
+            int(rec_params["index"][0]), rec_params["parent_hash"][0], rec_params["data"][0])
+        rec_block.hash_val = rec_params["hash_val"][0]
+        rec_block.nonce = int(rec_params["nonce"][0])
+        rec_block.timestamp = float(rec_params["timestamp"][0])
 
-        query_string = self.path.split("?")[-1]
-        try:
-            params = parse_qs(query_string, max_num_fields=3)
-        except ValueError:
-            # invalid request (too many parameters)
-            self.send_response(400)
-            self.end_headers()
-            return
+        print(f"received block on {self.ip}:{self.port}: {rec_block}")
 
-        # params is a dictionary of query parameter to list (of length 1)
-        # of the associated value
-
-        block = Block(params["index"][0], params["parent"]
-                      [0], params["data"][0])
-        if self.chain:
-            parent = self.chain[-1]
-        else:
-            parent = None
-        block_is_valid = network.validate(block, parent)
-
-        if block_is_valid:
-            self.chain.append(block)
+        self.network.add_block(rec_block)
 
     def listen_query(self):
         """
         list for requests for current chain status
         """
-        # TODO: Respond to query for contents of full chain (using serialize class method).
-        #       If using HTTP, this should be a route handler.
         print(f"`listen_query`: received request {self.request}")
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -313,12 +304,11 @@ class Node(BaseHTTPRequestHandler):
 
 
 class NodeServer:
-    def __init__(self, ip, port):
-        self.network = Network(4)
-        self.network.add_node(ip, port)
+    def __init__(self, ip, port, network):
+        self.network = network
 
         def handler(*args):
-            Node(self.network, *args)
+            Node(self.network, ip, port, *args)
 
         self.node_server = HTTPServer((ip, port), handler)
 
@@ -328,16 +318,24 @@ class NodeServer:
 
 if __name__ == "__main__":
     # start a new thread for each node
-    node_a = NodeServer("0.0.0.0", 8888)
-    # node_b = NodeServer("0.0.0.0", 9999)
 
-    node_a.start()
+    network = Network(1)
+    network.add_node("0.0.0.0", 8888)   # node A
+    network.add_node("0.0.0.0", 9999)   # node B
+    network.add_node("0.0.0.0", 7777)   # node C
 
-    # thread_a = threading.Thread(target=node_a.start)
-    # thread_b = threading.Thread(target=node_b.start)
+    node_a = NodeServer("0.0.0.0", 8888, copy.deepcopy(network))
+    node_b = NodeServer("0.0.0.0", 9999, copy.deepcopy(network))
+    node_c = NodeServer("0.0.0.0", 7777, copy.deepcopy(network))
 
-    # thread_a.start()
-    # thread_b.start()
+    thread_a = threading.Thread(target=node_a.start)
+    thread_b = threading.Thread(target=node_b.start)
+    thread_c = threading.Thread(target=node_c.start)
 
-    # thread_a.join()
-    # thread_b.join()
+    thread_a.start()
+    thread_b.start()
+    thread_c.start()
+
+    thread_a.join()
+    thread_b.join()
+    thread_c.join()
