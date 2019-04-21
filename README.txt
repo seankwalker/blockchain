@@ -13,6 +13,7 @@
 # Note: this file can be executed as a shell script via
 # ./README.txt
 
+# ~~~ Question 3 ~~~
 # start the python script
 python3 main.py > /dev/null 2>&1 &
 # or comment the above line and uncomment the line below to see server output:
@@ -35,3 +36,12 @@ echo "dishonest node:"; curl localhost:8888/query; sleep 1; echo "\n"
 echo "joiner node:"; curl localhost:9999/query; sleep 1; echo "\n"
 
 kill $proc_pid
+
+# ~~~ Question 4 ~~~
+# a) The divergence of two chains from some point is called a "fork."
+# b) Forks can come about for different reasons. In our case, it occurred
+#    because the dishonest node is, well, "dishonest" (and ignores the proper
+#    rules of the blockchain). However, forks can occur for other (good)
+#    reasons, such as a deliberate rule update which, for instance, increases
+#    the security of the protocol. In such a case, one would want to use that
+#    forked chain, since it's more secure than the source chain.
