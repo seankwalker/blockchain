@@ -44,4 +44,8 @@ kill $proc_pid
 #    rules of the blockchain). However, forks can occur for other (good)
 #    reasons, such as a deliberate rule update which, for instance, increases
 #    the security of the protocol. In such a case, one would want to use that
-#    forked chain, since it's more secure than the source chain.
+#    forked chain, since it's more secure than the source chain. Examples of
+#    such forks would be Bitcoin Cash, which is a fork of the original
+#    Bitcoin blockchain. when the original started to struggle due to its
+#    limited 1MB block size, the fork was created with a larger block size to
+#    improve scalability.

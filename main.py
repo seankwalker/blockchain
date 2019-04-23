@@ -1,3 +1,4 @@
+from blockchain import *
 """
     main.py
 
@@ -11,15 +12,16 @@
 """
 
 
-from blockchain import *
+# difficulty of network
+NET_DIFF = 4
 
 
 if __name__ == "__main__":
 
-    g_network = Network(1)
-    h_network = Network(1)
-    d_network = Network(1)
-    j_network = Network(1)
+    g_network = Network(NET_DIFF)   # generator node
+    h_network = Network(NET_DIFF)   # honest node
+    d_network = Network(NET_DIFF)   # dishonest node
+    j_network = Network(NET_DIFF)   # joiner node
 
     # generator broadcasts to honest and dishonest nodes
     g_network.add_node("0.0.0.0", 7777)
